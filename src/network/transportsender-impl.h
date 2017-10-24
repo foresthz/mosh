@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+#ifndef TRANSPORT_SENDER_IMPL_HPP
+#define TRANSPORT_SENDER_IMPL_HPP
+
 #include <algorithm>
 #include <list>
 #include <stdio.h>
@@ -53,7 +56,7 @@ TransportSender<MyState>::TransportSender( Connection *s_connection, MyState &in
     fragmenter(),
     next_ack_time( timestamp() ),
     next_send_time( timestamp() ),
-    verbose( false ),
+    verbose( 0 ),
     shutdown_in_progress( false ),
     shutdown_tries( 0 ),
     shutdown_start( -1 ),
@@ -176,13 +179,24 @@ void TransportSender<MyState>::tick( void )
     if ( current_state.compare( newstate ) ) {
       fprintf( stderr, "Warning, round-trip Instruction verification failed!\n" );
     }
+    /* Also verify that both the original frame and generated frame have the same initial diff. */
+    std::string current_diff( current_state.init_diff() );
+    std::string new_diff( newstate.init_diff() );
+    if ( current_diff != new_diff ) {
+      fprintf( stderr, "Warning, target state Instruction verification failed!\n" );
+    }
   }
 
-  if ( diff.empty() && (now >= next_ack_time) ) {
-    send_empty_ack();
-    mindelay_clock = uint64_t( -1 );
-  } else if ( !diff.empty() && ( (now >= next_send_time)
-			  || (now >= next_ack_time) ) ) {
+  if ( diff.empty() ) {
+    if ( (now >= next_ack_time) ) {
+      send_empty_ack();
+      mindelay_clock = uint64_t( -1 );
+    }
+    if ( (now >= next_send_time) ) {
+      next_send_time = uint64_t( -1 );
+      mindelay_clock = uint64_t( -1 );
+    }
+  } else if ( (now >= next_send_time) || (now >= next_ack_time) ) {
     /* Send diffs or ack */
     send_to_receiver( diff );
     mindelay_clock = uint64_t( -1 );
@@ -223,7 +237,7 @@ void TransportSender<MyState>::add_sent_state( uint64_t the_timestamp, uint64_t 
 }
 
 template <class MyState>
-void TransportSender<MyState>::send_to_receiver( string diff )
+void TransportSender<MyState>::send_to_receiver( const string & diff )
 {
   uint64_t new_num;
   if ( current_state == sent_states.back().state ) { /* previously sent */
@@ -304,7 +318,7 @@ const string TransportSender<MyState>::make_chaff( void )
 }
 
 template <class MyState>
-void TransportSender<MyState>::send_in_fragments( string diff, uint64_t new_num )
+void TransportSender<MyState>::send_in_fragments( const string & diff, uint64_t new_num )
 {
   Instruction inst;
 
@@ -320,8 +334,9 @@ void TransportSender<MyState>::send_in_fragments( string diff, uint64_t new_num 
     shutdown_tries++;
   }
 
-  vector<Fragment> fragments = fragmenter.make_fragments( inst, connection->get_MTU() );
-
+  vector<Fragment> fragments = fragmenter.make_fragments( inst, connection->get_MTU()
+							  - Network::Connection::ADDED_BYTES
+							  - Crypto::Session::ADDED_BYTES );
   for ( vector<Fragment>::iterator i = fragments.begin();
         i != fragments.end();
         i++ ) {
@@ -398,3 +413,5 @@ void TransportSender<MyState>::attempt_prospective_resend_optimization( string &
     proposed_diff = resend_diff;
   }
 }
+
+#endif
